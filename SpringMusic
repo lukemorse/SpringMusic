@@ -1,0 +1,903 @@
+(
+s.options.memSize = 65536;
+s.waitForBoot({
+
+	var useLiveInput = true;
+	var useMidi = true;
+	var record = false;
+	var buffers, numberOfBuffers = 100;
+	var inputChannel = 0;
+	var outputChannel = 0;
+	var fftsize=4096;
+	var pitchTaskFreq = 3;
+	var lengthOfEachBuffer = 0.5;
+
+	var ir, irbuffer, bufsize, target, hdr;
+	var audioInSynthDef, audioInSynth, noiseSynth, directSigSynth;
+	var replyName = '/myReply';
+	var allSynths, firstPlayerSynth, patternPlayerSynth, playerSynth, detectorSynth, recorderSynth, recorderSynths, convolutionSynth, responder, responder2;
+	var convActionIndex = 0, bufferIndex;
+	var buffersWithValues, buffersWithValuesCopy, orderedBufferArray;
+	var irSpectrum, irSpecBufNum, numpartitions;
+	var bufferIndexes = Array.new(numberOfBuffers);
+	var preBus, bus, group, convolutionBus, patternBus, stretchBus, distSynth, convolutionSynth2, stretchSynth, stretchSynth2, patternOut, controlBus;
+	var vLayout, window, allButtons, allSliders, allMIDIdefs;
+	var buttonStates, midiOut, functionForButtons;
+	var button1, button2, button3, button4, button5, button6, button7, slider1, slider2, slider3, slider4, slider5, slider6, slider7, slider8, slider9, slider10, slider11, slider12, slider13;
+	var changeConvolutionBuffer, bufferOrder, bufferOrderRef;
+	var bufferOrderIndex = 0;
+	var durArray, pitchArray, durFunc = 0.15625, windowSizeFunc, longNoteBalance, noteOrRest = 0;
+	var bufWinSel = 0, bufferWindowHighEnd, bufWinSizeSel = 20, sequence, sequenceFunc, sequenceUpdate, shortSequence, shortSequenceFunc;
+	var rePitchSynths, pitches = [0.5, 1, 1.25], pitchTask;
+	var rePitchMulti = 20, pitchLow, pitchHigh;
+	// var initialKernel = Buffer.read(s, "/Users/dxlocal/Downloads/scrape.wav");
+	var initialKernel = Buffer.read(s, "/Users/lukemorse/Desktop/scrape.wav");
+	var repitchAmp = 0.95, patternAmp = 0.5;
+	var patternButtons = Array.newClear(5);
+	var currentPattern;
+	var arrayOfOrderedBufferArrays, arrayOfBufferWindowHighEnds, arrayOfBufWinSels, arrayOfBufWinSizeSels, arrayOfSequenceFuncs, arrayOfDurFuncs, arrayOfMainPatterns, arrayOfSecondaryPatterns, arrayOfLastMainEvents, arrayOfSequences, arrayOfPatternAmps;
+	var patStrtchWinSz = 0.2, patStrtchOvrLps = 4, patternAttack = 0.002;
+
+	// pattern button stuff-----
+	arrayOfOrderedBufferArrays = Array.newClear(6);
+	arrayOfBufferWindowHighEnds = Array.newClear(6);
+	arrayOfBufWinSels = Array.newClear(6);
+	arrayOfBufWinSizeSels = Array.newClear(6);
+	arrayOfSequenceFuncs = Array.newClear(6);
+	arrayOfSequences = Array.newClear(6);
+	arrayOfDurFuncs = Array.newClear(6);
+	arrayOfMainPatterns = Array.newClear(6);
+	arrayOfSecondaryPatterns = Array.newClear(6);
+	arrayOfLastMainEvents = Array.newClear(6);
+	arrayOfPatternAmps = Array.fill(6, 0.5);
+
+	// Record here
+	hdr = HDR.new(
+		s, //server
+		[outputChannel, outputChannel + 1], //an array of all the channels to record
+		sessionPath: "".resolveRelative, //current folder
+		filename: "rec",
+		headerFormat: "aiff",
+		sampleFormat: "float", //also int16, int24
+	);
+
+	if(record, {hdr.record});
+
+	if(useMidi, {
+		MIDIClient.init; // initialize midi
+		MIDIIn.connectAll; //to use all midi ports
+	});
+
+	// More pattern stuff: arrays of pitch and rhythm information
+	durArray = [2, 3/2, 4/3, 5/4, 6/5, 9/8, 10/9, 16/15];
+	durArray = durArray ++ (durArray/2) ++ (durArray/4) ++ (durArray/8) ++ (durArray/16);
+	durArray = durArray.sort;
+
+	pitchArray = [1024/729, 256/243, 128/81, 32/27, 16/9, 4/3, 1, 3/2, 9/8, 27/16, 81/64, 243/128, 729/512].sort;
+	pitchArray = (pitchArray ++ pitchArray ++ (pitchArray * 0.5) ++ (pitchArray * 2)).sort;
+	pitchHigh = pitchArray.size;
+	pitchLow = 0;
+	// ++++++++++++++++++++++++++++++++++++++++++
+
+	//create a layout which will space our buttons
+	vLayout = VLayout.new;
+
+	//we also need a window
+	window = Window.new("My GUI", 600@400/*syntactical shorcut to create a Point*/);
+
+	// REPITCH SYNTHS CREATED HERE
+	button1 = Button(window)
+	.states_([["Repitch Synth"], ["REPITCH SYNTH PLAYING"]])
+	.action_({|buttonObject|
+		buttonObject.value.postln;
+
+		if(buttonObject.value.asBoolean, {
+
+			group = Group(convolutionSynth2, \addBefore);
+
+			rePitchSynths = 20.collect({
+				Synth(\rePitchSynth, [\inBus, bus, \outBus, convolutionBus, \pitch1, pitches.choose, \pitch2, pitches.choose, \pan, 1.0.rand2, \amp, repitchAmp, \crossDur, 0.01, \pitchDis, 0.02, \windowSize, 1, \timeDis, 1, \delay, 0], group);
+			});
+
+			pitchTask = Task({
+				{
+					pitches = pitches.put(0, pitchArray[pitchLow..pitchHigh].choose);
+					pitches = pitches.put(1, pitchArray[pitchLow..pitchHigh].choose);
+					pitches = pitches.put(2, pitchArray[pitchLow..pitchHigh].choose);
+					// "pitches: ".post; pitches.postln;
+					rePitchSynths.do(_.set(\pitch1, pitches.choose));
+					rePitchSynths.do(_.set(\pitch2, pitches.choose));
+					pitchTaskFreq.wait;
+			}.loop});
+
+			pitchTask.start;
+
+			},
+			{
+				rePitchSynths.free;
+				pitchTask.stop;
+				group.free;
+		});
+	});
+
+	// NOISE SYNTH CREATED HERE
+	button2 = Button(window)
+	.states_([["Noise Synth"], ["NOISE SYNTH PLAYING!"]])
+	.action_({|buttonObject|
+
+		buttonObject.value.postln;
+		if(buttonObject.value.asBoolean, {
+
+			noiseSynth = Synth.after(audioInSynth, \noiseSynth, [\inBus, bus, \outBus, convolutionBus]);
+
+			},
+			{
+				noiseSynth.free;
+		});
+	});
+
+
+	patternButtons = patternButtons.collect({arg thisButton, i;
+		thisButton = Button(window)
+		.states_([["pattern player " ++ (i + 1)], ["pattern player " ++ (i + 1) ++ " Playing"]])
+		.action_({|buttonObject|
+
+			buttonObject.value.postln;
+			if(buttonObject.value.asBoolean, {
+
+				//Keep only the bufnums
+				arrayOfOrderedBufferArrays[i] = buffersWithValues.collect({arg thisArr, inc;
+					thisArr[0];
+				});
+
+				// Post buffer array
+				"buffers with values: ".post; buffersWithValues.postln;
+				"orderedBufferArray: ".post; arrayOfOrderedBufferArrays[i].postln;
+
+				// Define the end of the window of buffers
+				arrayOfBufferWindowHighEnds[i] = {arrayOfOrderedBufferArrays[i].size - arrayOfBufWinSels[i]};
+
+				// Function to create the sequence of buffers
+				arrayOfSequenceFuncs[i] = {arrayOfOrderedBufferArrays[i][(arrayOfBufferWindowHighEnds[i] .value.asInteger - arrayOfBufWinSizeSels[i].asInteger)..arrayOfBufferWindowHighEnds[i].value.asInteger]};
+
+				arrayOfSequences[i] = PatternProxy(Pseq(arrayOfSequenceFuncs[i].value, inf));
+
+				sequenceUpdate = Task({{
+					arrayOfSequences[i].source = Pseq(arrayOfSequenceFuncs[i].value, inf);
+					"sequence: ".post; arrayOfSequenceFuncs[i].value.postln;
+
+					buffersWithValuesCopy = buffersWithValues.shallowCopy;
+					arrayOfOrderedBufferArrays[i] = buffersWithValuesCopy.collect({arg thisArr, inc;
+						thisArr[0];
+					});
+
+					arrayOfBufferWindowHighEnds[i] = {arrayOfOrderedBufferArrays[i].size - arrayOfBufWinSels[i]};
+
+					2.wait;
+
+				}.loop});
+
+				sequenceUpdate.start;
+
+				arrayOfMainPatterns[i] = Pbind(
+					\instrument, \patternPlayer,
+					\buf, arrayOfSequences[i],
+					\pan, Pfunc{1.0.rand2}.value,
+					\dur, Pfunc{arrayOfDurFuncs[i].value},
+					// \speed, Pfunc{pitches.choose},
+					\speed, 1,
+					\atk, Pfunc{patternAttack.value},
+					\amp, Pfunc{arrayOfPatternAmps[i].value},
+					\legato, 2,
+					\outBus, patternBus,
+					\type, Pwrand([\note, \rest], Pfunc{[1.0 - noteOrRest, noteOrRest].value}, inf),
+				).collect({arg event;
+					arrayOfLastMainEvents[i] = event;
+					event;
+				}).play(quant: 1);
+
+				"Last main event: ".post; arrayOfLastMainEvents[currentPattern].postln;
+				// "Sequence: ".post; sequenceFunc.value.postln;
+
+				arrayOfSecondaryPatterns[i] = Pbind(
+					\instrument, \stretchSynth,
+					\buf, arrayOfSequences[i],
+					\pan, Pfunc{1.0.rand2}.value,
+					\dur, Pfunc{arrayOfDurFuncs[i].value},
+					\amp, Pfunc{arrayOfPatternAmps[i].value},
+					\duration, 2 + 3.rand,
+					\windowSize, Pfunc{patStrtchWinSz}.value,
+					\overlaps, Pfunc{patStrtchOvrLps}.value,
+					\legato, 1,
+					\freq, Pfunc{pitches.choose * [1, -1].choose},
+					\outBus, patternBus,
+					\type, Pif(Pfunc{ (arrayOfLastMainEvents[i])[\type]==\rest }, \note, \rest)
+				).play(quant: 1);
+
+
+
+				},
+				{
+					Routine({
+						// 1.5.wait;
+						arrayOfMainPatterns[i].stop;
+						arrayOfSecondaryPatterns[i].stop;
+
+						// 9.do({arg i;
+						// 	Synth(\stretchSynth, [
+						// 		\buf, thisSequenceFunc.value[i],
+						// 		\duration, 5,
+						// 		\dur, 0.5,
+						// 		\outBus, patternBus,
+						// 		\overlaps, 3,
+						// 	\freq, (i + 1)/9 ]);
+						// 	0.1.wait;
+						// });
+
+						sequenceUpdate.stop;
+
+					}).play;
+				}
+			);
+		});
+	});
+
+	allButtons = [button1, button2] ++ patternButtons;
+
+	vLayout.add( //add to the general layout
+		HLayout(
+			VLayout(
+				*( //asterisk will unpack the array, which will be concatenated array of allButtons and array of HLayouts containing separate elements of sliders from allSliders
+					allButtons;
+				)
+			)
+		);
+	); //add to layout parenthesis
+
+	//add layout to the window
+	window.layout_(vLayout);
+
+	//bring the window to front
+	window.front;
+
+	//free buffers on close
+	window.onClose_({
+		"stop all notes - through buttons".postln;
+		allButtons.do({arg thisButt;
+			if(thisButt.notNil, {
+				thisButt.valueAction_(0)
+			})
+		});
+		"freeing buffers".postln;
+		b.do(_.free);
+		allMIDIdefs.do(_.free); //free responders
+		responder.free;
+		allSynths.do(_.free);
+		sequenceUpdate.stop;
+		patternOut.free;
+		directSigSynth.free;
+		group.free;
+		~mainPattern.stop;
+		~secondaryPattern.stop;
+		hdr.stop;
+	});
+
+	window.view.keyUpAction_({|thisView, char, modifiers, unicode, keycode, key|
+		var thisIndex, thisButton;
+		[char, modifiers, unicode, keycode, key].postln;
+		thisIndex = key - 49;
+		"thisIndex: ".post; thisIndex.postln;
+		if((thisIndex >= 0) && (thisIndex < allButtons.size), {
+			thisButton = allButtons[thisIndex];
+			if(thisButton.value.asBoolean, {
+				thisButton.valueAction = 0;
+				}, {
+					thisButton.valueAction = 1;
+			});
+		});
+	});
+
+	// target = Buffer.read(s, "/Users/lukemorse/Desktop/Spring Box Piece/bowed nail 4_28.wav");
+	// target = Buffer.read(s, "/Users/lukemorse/Desktop/might not need/565_Morse_Final/565_Samples/spring box samples abridged.wav");
+
+	// target = Buffer.read(s, "/Users/lukemorse/Desktop/first 5 min boxes 5_25.wav");
+
+
+	target = Buffer.read(s, "/Users/lukemorse/Downloads/test 7_7_1.aif");
+
+
+
+	s.sync;
+
+
+	// SYNTH DEFINITIONS!!!
+
+
+	SynthDef(\firstSoundPlayer, {|outBus = 0, buf = 0, pan= 0, amp= 0.8, atk= 0.002, rel= 0.1, gate= 1, speed= 1, irbufnum|
+		// var env= EnvGen.kr(Env([0, amp, 0], [atk, rel], \sin, 1), gate, doneAction:2);
+		var src= PlayBuf.ar(1, target, speed, loop: 0);
+		Out.ar(outBus, Pan2.ar(src));
+	}).add;
+
+
+	SynthDef(\audioIn, {arg inBus = 0, outBus = 0, direct = 0.0, amp = 1;
+		var sig;
+		sig = Mix.ar(In.ar(inBus, 2));
+		sig = sig * amp;
+		Out.ar(outputChannel, Pan2.ar(sig * direct));
+		Out.ar(outBus, sig);
+		// sig.numChannels.postln;
+	}).send;
+
+
+	SynthDef(\directSig, {arg inBus = 0, outBus = 0, amp = 1;
+		var sig, compSig;
+		sig = In.ar(inBus, 1) * amp;
+		// compSig = Compander.ar(sig, sig, 0.7);
+		Out.ar(outBus, Pan2.ar(sig));
+	}).send;
+
+
+	SynthDef(\soundDetector, {|inBus = 0, thresh= 0.001, time= 0.1, id = 0|
+		var input, off, amp, localbuf, chain, changed, on, cnt, trig, flat, centroid, percentile, entropy, dissonance, freq, hasFreq, sendReply;
+		// onset detection
+		input= Mix.ar(In.ar(inBus, 2));
+		off= A2K.kr(DetectSilence.ar(input, thresh, time)); //converted to .kr
+		amp = Amplitude.kr(input);
+		localbuf = LocalBuf(2048, 2);
+		chain = FFT(localbuf, input);
+		# freq, hasFreq = Tartini.kr(input);
+		changed = Onsets.kr(chain, 0.3);
+		on= 1-off;				//invert
+		cnt = PulseCount.kr(changed)%numberOfBuffers;	//buffer index counter
+		trig = TDelay.kr(changed, 0.05);
+		// values
+		flat = SpecFlatness.kr(chain);
+		centroid = SpecCentroid.kr(chain);
+		percentile = SpecPcile.kr(chain);
+		entropy = SpectralEntropy.kr(chain);
+		dissonance = SensoryDissonance.kr(chain);
+		// sendReply
+		sendReply = SendReply.kr(trig, replyName, [flat, centroid, percentile, entropy, dissonance, cnt, amp, on, freq, hasFreq], id);
+	}).add;
+
+
+	SynthDef(\soundRecorder, {|buf, t_trig= 0, inBus|
+		var src= LeakDC.ar(DelayN.ar(In.ar(inBus), 0.1, 0.1));	//compensate for detector latency
+		var env= EnvGen.kr(Env.perc(0.001, 1, 1, -4), doneAction:0);
+		// Amplitude.kr(src).ampdb.poll(2, \recAmp);
+		RecordBuf.ar(src, buf, loop: 0, trigger: t_trig);
+	}).add;
+
+
+	SynthDef(\patternPlayer, {arg outBus, buf = 0, pan = 0, amp = 0.5, atk = 0.1, rel = 0.1, gate = 1, dur = 0.5, speed = 1;
+		var env, src, compSig, out;
+		env = EnvGen.kr(Env([0, amp, amp, 0], [atk, dur - (atk + rel), rel], \sin, 1), gate, timeScale: 1, doneAction:2);
+		src = HPF.ar(PlayBuf.ar(1, buf, speed, loop:0), 100);
+		compSig = Compander.ar(src, src,
+			thresh: 0.3,
+			slopeBelow: 1,
+			slopeAbove: 0.5,
+			clampTime: 0.01,
+			relaxTime: 0.01);
+		out = Out.ar(outBus, Pan2.ar(compSig * env, pan));
+	}).add;
+
+
+	SynthDef(\noiseSynth, {arg amp = 1.0, pan = 0, inBus, outBus, fb = 0.95, delay = 0.05, mod = 3;
+		var env, in, delay1, delay2, delay3, delay4, allSigs, delSig, delSig2, amplitude, noise;
+		var ap1, ap2, revout, reNoise, compIn, gatedNoise;
+		in = In.ar(inBus, 2);
+		compIn = Compander.ar(in, in,
+			thresh: 0.1,
+			slopeBelow: 1,
+			slopeAbove: 0.5,
+			clampTime: 0.01,
+			relaxTime: 0.01
+		);
+		delSig = SwitchDelay.ar(compIn, 1, 1, delay, fb, 10);
+		delSig2 = SwitchDelay.ar(delSig, 1, 1, delay, fb, 10);
+		amplitude = Amplitude.kr(delSig2)/* * SinOsc.kr(mod) * 2*/;
+		noise = WhiteNoise.ar(amplitude * amp);
+		// amplitude.poll;
+
+		Out.ar(outBus, Pan2.ar(noise, pan));
+
+	}).add;
+
+
+	SynthDef(\stretchSynth, {arg outBus, speed = 1, inBus = 0, pan = 0, gate = 1, rate = 1, amp = 1, buf, envbuf, duration = 1, atk = 0.01, sus = 0.5, crossDur = 0.01, freq = 1, windowSize = 0.1, overlaps = 8;
+		var input, chain, onset, env, pointer, crossLevel, attackSrc, rePitchedSrc, compRePitchedSrc, crossFade, length, compSig, out;
+		// input = In.ar(inBus, 1);
+		input = HPF.ar(PlayBuf.ar(1, buf, speed, loop:0));
+		chain = FFT(LocalBuf(2048), input);
+		onset = Onsets.kr(chain, 0.7);
+		attackSrc = PlayBuf.ar(1, buf);
+		pointer = Line.kr(0.1, 1, duration);
+		crossLevel = Line.kr(-1, 1, crossDur);
+		rePitchedSrc = Warp1.ar(1, buf, pointer, freq, windowSize, interp: 4, overlaps: overlaps, windowRandRatio: 0);
+		compRePitchedSrc = Compander.ar(rePitchedSrc, rePitchedSrc, 0.1, 1, 0.5, 0.01, 0.01) * 2;
+		crossFade = XFade2.ar(attackSrc, compRePitchedSrc, 0, crossLevel);
+		// compSig = Compander.ar(crossFade, crossFade, 0.3, 1, 0.1, 0.01, 0.01);
+		env = EnvGen.kr(Env([0.002, 1, 1, 0.002],[atk, sus, duration - atk + sus], \exponential), gate, timeScale: 1, doneAction:2);
+
+		out = Out.ar(outBus, Pan2.ar(crossFade * env * amp, pan));
+	}).add;
+
+
+	SynthDef(\rePitchSynth, {arg outBus, pitch1 = 1, pitch2 = 1, pan = 0, inBus = 0, gate = 1, amp = 0.5, duration = 5, atk = 0.01, crossDur = 0.01, windowSize = 0.2, pitchDis = 0.02, timeDis = 0, delay = 0;
+		var input, envIn, env, crossLevel, attackSrc, rePitch, crossFade, length, compSig, out;
+		input = Mix.ar(In.ar(inBus, 2) * amp);
+		envIn = input * EnvGen.kr(Env.perc(releaseTime: 0.1));
+		// rePitch = PitchShift.ar(input, windowSize,pitch, pitchDis, timeDis);
+		rePitch = PitchShift.ar(input, windowSize, [pitch1, pitch1], pitchDis, timeDis);
+		// crossLevel = DelayN.kr(Line.kr(-1.0, 1.0, crossDur), 0.02, 0.02);
+		// crossFade = XFade2.ar(envIn, rePitch, 0, crossLevel);
+		// compSig = Compander.ar(crossFade, crossFade, 0.2, 1, 1/3, 0.01, 0.01) * 2;
+		compSig = Mix.ar(Compander.ar(rePitch, rePitch, 0.2, 1, 1/3, 0.01, 0.01));
+		out = Out.ar(outBus, Pan2.ar(compSig, pan));
+		out.numChannels.postln;
+	}).add;
+
+
+	SynthDef(\convolutionOut, {arg inBus, irbufnum, distMix = 0.0, directMix = 1.0, convMix = 0.0, noiseMix = 0.0, kernel, kernelTrig = 0;
+		var src, distSrc, direct, out, convolvedSig, compConv;
+		src = In.ar(inBus, 2);
+		direct = src * 0.5;
+		convolvedSig = Convolution2L.ar(src,
+			kernel: kernel,
+			trigger: kernelTrig,
+			framesize: fftsize,
+			crossfade: 3,
+			mul: 0.1);
+		compConv = HPF.ar(Compander.ar(convolvedSig, convolvedSig, 0.3, 1, 0.1, 0.01, 0.01), 300);
+
+		out = Out.ar(outputChannel, (compConv * convMix) + (direct * directMix))
+
+	}).add;
+
+
+	SynthDef(\patternOut, {arg inBus;
+		var in, reverb, out;
+
+		in = In.ar(inBus, 2);
+		reverb = FreeVerb.ar(in, 0.15);
+		out = Out.ar(outputChannel, reverb);
+
+	}).add;
+
+
+	// RECORDED BUFFERS!!!!!
+
+	b = {Buffer.alloc(s, s.sampleRate*0.5)}.dup(numberOfBuffers);	//mono buffers
+
+	b.do({arg item, i;
+		bufferIndexes.add(item.bufnum);
+	});
+
+	buffersWithValues = Array(numberOfBuffers);
+
+	// BUSSES!!!!
+
+	s.sync;
+
+	preBus = Bus.audio(s);
+
+	bus = Bus.audio(s, 2);
+
+	patternBus = Bus.audio(s, 2);
+
+	convolutionBus = Bus.audio(s, 2);
+
+	stretchBus = Bus.audio(s);
+
+	controlBus = Bus.control(s);
+
+
+	// SYNTHS!!!
+
+	s.sync;
+
+	// if not using live input, make a synth to play the soundfile (target)
+	if(useLiveInput, {}, {
+		firstPlayerSynth = Synth.before(audioInSynth,\firstSoundPlayer, [\outBus, preBus]);
+		};
+	);
+
+	audioInSynth = Synth(\audioIn, [\inBus, preBus, \outBus, bus]);
+
+	directSigSynth = Synth.after(audioInSynth, \directSig, [\inBus, bus, \outBus, convolutionBus]);
+
+	detectorSynth= Synth.after(audioInSynth, \soundDetector, [\inBus, bus]);
+
+	recorderSynth = Synth.after(detectorSynth, \soundRecorder, [\inBus, bus]);
+
+	stretchSynth = Synth.after(recorderSynth, \stretchSynth, [\inBus, bus, \outBus, convolutionBus, \freq, 1]);
+
+	convolutionSynth2 = Synth.after(patternPlayerSynth, \convolutionOut, [\inBus, convolutionBus, \kernel, initialKernel.bufnum]);
+
+	patternOut = Synth.after(patternPlayerSynth, \patternOut, [\inBus, patternBus]);
+
+	if(useLiveInput, {audioInSynth.set(
+		\inBus, s.options.numOutputBusChannels + inputChannel, 1)};
+	);
+
+	allSynths = [audioInSynth, detectorSynth, recorderSynth, patternPlayerSynth, convolutionSynth2, stretchSynth, noiseSynth, rePitchSynths, firstPlayerSynth];
+
+	// if(useLiveInput, {}, {allSynths.add(firstPlayerSynth)});
+
+	group = Group.before(convolutionSynth2, );
+
+	s.sync;
+
+
+
+
+	// MIDI!!!!!!
+
+	if(useMidi, {
+
+		midiOut = MIDIOut.newByName("Akai APC40", "Akai APC40");
+		// midiOut.noteOn(0, 53, 3);
+
+		buttonStates = false ! 5 ! 8;
+
+
+		MIDIdef.noteOn(\buttonStates, {arg val, num, chan, src;
+			var offsetNoteNum;
+			offsetNoteNum = num - 0x35; //0-5 for note numbers
+			if(buttonStates[chan][offsetNoteNum], { //this is toggling
+				buttonStates[chan][offsetNoteNum] = false;
+				}, {
+					buttonStates[chan][offsetNoteNum] = true;
+					// buttonStates[chan][offsetNoteNum].postln;
+			});
+			//now run the function
+			functionForButtons.value(chan, offsetNoteNum, buttonStates[chan][offsetNoteNum]);
+
+		});
+
+
+		functionForButtons = {arg column = 0, row = 0, value = false;
+			//flip LEDs
+			midiOut.noteOn(column, row + 0x35, value.asInteger * 3);
+			//do something you'd like here, using column/row info
+
+			/*	if(value, {
+			noiseSynth = Synth.after(audioInSynth, \noiseSynth, [\inBus, bus, \outBus, convolutionBus])
+			}, {
+			noiseSynth.release;
+			});*/
+
+			// This one is special, because it doesn't stay on:
+			if(column == 1 && row == 1,{
+				{
+					changeConvolutionBuffer.play;
+					"Changing Convolution Buffer...".postln;
+					0.5.wait;
+					midiOut.noteOff(1, 1 + 0x35)
+				}.fork;
+				}
+			);
+
+			// Choose which pattern button the knobs are corresponding to
+			if(row == 4, {currentPattern = column - 2;
+				"currentPattern: ".post; currentPattern.postln;
+				"last main event: ".post; arrayOfLastMainEvents[currentPattern].postln;
+			});
+
+
+
+			if(value, {
+				if(column == 0 && row == 0,{
+					{button1.valueAction = 1}.defer;});
+				if(column == 1 && row == 0,{
+					{button2.valueAction = 1}.defer;});
+				if(column == 2 && row == 0,{
+					{patternButtons[0].valueAction = 1}.defer;});
+				if(column == 3 && row == 0,{
+					{patternButtons[1].valueAction = 1}.defer;});
+				if(column == 4 && row == 0,{
+					{patternButtons[2].valueAction = 1}.defer;});
+				if(column == 5 && row == 0,{
+					{patternButtons[3].valueAction = 1}.defer;});
+				if(column == 6 && row == 0,{
+					{patternButtons[4].valueAction = 1}.defer;});
+				if(column == 7 && row == 0,{
+					{patternButtons[5].valueAction = 1}.defer;});
+				},
+				{
+					if(column == 0 && row == 0,{
+						{button1.valueAction = 0}.defer;});
+					if(column == 1 && row == 0,{
+						{button2.valueAction = 0}.defer;});
+					if(column == 2 && row == 0,{
+						{patternButtons[0].valueAction = 0}.defer;});
+					if(column == 3 && row == 0,{
+						{patternButtons[1].valueAction = 0}.defer;});
+					if(column == 4 && row == 0,{
+						{patternButtons[2].valueAction = 0}.defer;});
+					if(column == 5 && row == 0,{
+						{patternButtons[3].valueAction = 0}.defer;});
+					if(column == 6 && row == 0,{
+						{patternButtons[4].valueAction = 0}.defer;});
+					if(column == 7 && row == 0,{
+						{patternButtons[5].valueAction = 0}.defer;});
+			});
+		};
+
+		MIDIdef.noteOff(\recOn, {arg val, num, chan, src;
+			responder.fork;
+		}, 92);
+
+		MIDIdef.noteOff(\recOff, {arg val, num, chan, src;
+			responder.free;
+		}, 93);
+
+		// Knob 1.1
+		MIDIdef.cc(\rePitchMulti, {arg val, num, chan, src;
+			rePitchMulti = val.linlin(0, 127, 1, 20).asInteger;
+			rePitchMulti.postln;
+			20.do({arg i;
+				if(i >= rePitchMulti, {rePitchSynths[i].set(\amp, 0)}, {rePitchSynths[i].set(\amp, repitchAmp)});
+			});
+		}, 48);
+
+		// Knob 1.2
+		MIDIdef.cc(\rePitchTimeDis, {arg val, num, chan, src;
+			var timeDis = val.linlin(0, 127, 0.0, 1.0);
+			rePitchSynths.do(_.set(\timeDis, timeDis));
+			timeDis.postln;
+		}, 49);
+
+		// Knob 1.3
+		MIDIdef.cc(\rePitchPitchLow, {arg val, num, chan, src;
+			pitchLow = val.linlin(0, 127, 0, pitchArray.size - 1).asInteger;
+			"Pitch Low: ".post; pitchLow.postln;
+		}, 50);
+
+		// Knob 1.4
+		MIDIdef.cc(\rePitchPitchHigh, {arg val, num, chan, src;
+			pitchHigh = val.linlin(0, 127, 0, pitchArray.size - 1).asInteger;
+			"Pitch High: ".post; pitchHigh.postln;
+		}, 51);
+
+		// Knob 1.5
+		MIDIdef.cc(\bufWinSel, {arg val, num, chan, src;
+			var newVal;
+			newVal = val.linlin(0, 127, 0, numberOfBuffers - 1).asInteger;
+			// check to see if there enough buffers to fill the sequence; if not, don't adjust
+			if((newVal + 1 + arrayOfBufWinSizeSels[currentPattern]) < buffersWithValues.size, {
+				arrayOfBufWinSels[currentPattern] = newVal;
+			});
+
+			// arrayOfBufWinSels[currentPattern] = val.linlin(0, 127, 0, numberOfBuffers - 1).asInteger;
+			if(arrayOfMainPatterns[currentPattern].notNil, {arrayOfBufferWindowHighEnds[currentPattern].fork});
+			if(arrayOfMainPatterns[currentPattern].notNil, {arrayOfSequenceFuncs[currentPattern].fork});
+			arrayOfSequenceFuncs[currentPattern].value.postln;
+		}, 52);
+
+		// Knob 1.6
+		MIDIdef.cc(\bufWinSizeSel, {arg val, num, chan, src;
+
+			arrayOfBufWinSizeSels[currentPattern] = val.linlin(0, 127, 1, 20).asInteger;
+
+			if(arrayOfMainPatterns[currentPattern].notNil, {arrayOfSequenceFuncs[currentPattern].fork});
+			if(arrayOfMainPatterns[currentPattern].notNil, {arrayOfBufWinSizeSels[currentPattern].postln});
+		}, 53);
+
+		// Knob 1.7
+		MIDIdef.cc(\noteOrRest, {arg val, num, chan, src;
+			noteOrRest = val.linlin(0, 127, 0.0, 1.0);
+		}, 54);
+
+		// Knob 1.8
+		MIDIdef.cc(\bufferOrder, {arg val, num, chan, src;
+
+			bufferOrderIndex = val.linlin(0, 127, 0, 7).asInteger;
+			"Ordering Buffers based on: ".post; bufferOrderRef[bufferOrderIndex].postln;
+
+			buffersWithValues = buffersWithValues.sort({arg a, b; a[bufferOrderIndex] < b[bufferOrderIndex];});
+
+			arrayOfSequenceFuncs[currentPattern].fork;
+
+			// arrayOfSequences[currentPattern].source = Pseq(arrayOfSequenceFuncs[currentPattern].value, inf);
+			// shortSequence.source = Pseq(sequenceFunc.value, inf);
+
+		}, 55);
+
+		// oo0o00ooo000o0o000oo0o00ooo000o0o000oo0o00ooo000o0o000oo0o00ooo000o0o000
+
+		// Knob 2.1
+		MIDIdef.cc(\noiseSynthFB, {arg val, num, chan, src;
+			noiseSynth.set(\fb, val.linlin(0, 127, 0.0, 1.0));
+		}, 16);
+
+		// // Knob 2.2
+		// MIDIdef.cc(\noiseSynthDelayTime, {arg val, num, chan, src;
+		// 	noiseSynth.set(\delay, val.linlin(0, 127, 0.0, 0.1));
+		// }, 17);
+
+		// Knob 2.3
+		MIDIdef.cc(\pitchTaskFreq, {arg val, num, chan, src;
+			pitchTaskFreq = val.linlin(0, 127, 0.1, 3.0);
+			"pitchTaskFreq: ".post; pitchTaskFreq.postln;
+		}, 18);
+
+		// Knob 2.4
+		MIDIdef.cc(\patternsNoteDuration, {arg val, num, chan, src;
+			arrayOfDurFuncs[currentPattern] = durArray[val.linlin(0, 127, 0, durArray.size - 1).asInteger];
+			durArray[val.linlin(0, 127, 0, durArray.size - 1).asInteger].postln;
+		}, 19);
+
+		// Knob 2.5
+		MIDIdef.cc(\patternsStretchType, {arg val, num, chan, src;
+			patStrtchWinSz = val.linlin(0, 127, 0.05, 0.005);
+			// patStrtchWinSz = 0.2;
+			patStrtchWinSz.postln;
+			patStrtchOvrLps = val.linlin(0, 127, 1, 5);
+			// [patStrtchWinSz, patStrtchOvrLps].postln;
+		}, 20);
+
+		// Knob 2.6
+		MIDIdef.cc(\patternAttack, {arg val, num, chan, src;
+			patternAttack = val.linlin(0, 127, 0.002, 0.1);
+		}, 21);
+
+
+
+		// oo0o00ooo000o0o000oo0o00ooo000o0o000oo0o00ooo000o0o000oo0o00ooo000o0o000
+
+		// Fader 1
+		MIDIdef.cc(\repitchAmp, {arg val, num, chan, src;
+			repitchAmp = val.linexp(1, 127, 0.0002, 1.0);
+			rePitchSynths.do(_.set(\amp, repitchAmp));
+			repitchAmp.postln;
+		}, 7, 0);
+
+		// Fader 2
+		MIDIdef.cc(\noiseSynthAmp, {arg val, num, chan, src;
+			noiseSynth.set(\amp, val.linexp(0, 127, 0.0002, 1.0));
+			noiseSynth[\amp].postln;
+		}, 7, 1);
+
+		// Fader 3
+		MIDIdef.cc(\patternAmp0, {arg val, num, chan, src;
+			arrayOfPatternAmps[0] = val.linexp(0, 127, 0.0002, 1.0);
+			arrayOfPatternAmps[0].postln;
+		}, 7, 2);
+
+		// Fader 4
+		MIDIdef.cc(\patternAmp1, {arg val, num, chan, src;
+			arrayOfPatternAmps[1] = val.linexp(0, 127, 0.0002, 1.0);
+			arrayOfPatternAmps[1].postln;
+		}, 7, 3);
+
+		// Fader 5
+		MIDIdef.cc(\patternAmp2, {arg val, num, chan, src;
+			arrayOfPatternAmps[2] = val.linexp(0, 127, 0.0002, 1.0);
+			arrayOfPatternAmps[2].postln;
+		}, 7, 4);
+
+		// Fader 6
+		MIDIdef.cc(\patternAmp3, {arg val, num, chan, src;
+			arrayOfPatternAmps[3] = val.linexp(0, 127, 0.0002, 1.0);
+			arrayOfPatternAmps[3].postln;
+		}, 7, 5);
+
+		// Fader 7
+		MIDIdef.cc(\patternAmp4, {arg val, num, chan, src;
+			arrayOfPatternAmps[4] = val.linexp(0, 127, 0.0002, 1.0);
+			arrayOfPatternAmps[4].postln;
+		}, 7, 6);
+
+		// Fader 8
+		MIDIdef.cc(\patternAmp5, {arg val, num, chan, src;
+			directSigSynth.set(\amp, val.linexp(0, 127, 0.0002, 1.0));
+		}, 7, 7);
+
+		// Cross Fader
+		MIDIdef.cc(\convMix, {arg val, num, chan, src;
+			var convMix;
+			convMix = val.linlin(0, 127, 0.0, 1.0);
+			convolutionSynth2.set(\convMix, convMix);
+			convolutionSynth2.set(\directMix, 1.0 - convMix);
+		}, 15, 0);
+
+
+
+	});
+
+	// RESPONDER!!!!!!!!
+
+
+	responder = {
+		OSCdef(replyName, {arg msg, time;
+
+			var thisFlat = msg[3];
+			var thisCentroid = msg[4];
+			var thisPercentile = msg[5];
+			var thisEntropy = msg[6];
+			var thisDissonance = msg[7];
+			var thisAmp = msg[9];
+			var onOff = msg[10];
+			var thisFreq = msg[11];
+			var thisHasFreq = msg[12];
+			bufferIndex = bufferIndexes[msg[8]];
+
+			bufferOrder = [thisFlat, thisCentroid, thisPercentile, thisEntropy, thisDissonance, thisAmp, thisFreq, thisHasFreq];
+			bufferOrderRef = ["flatness", "centroid", "percentile", "entropy", "dissonance", "amp", "freq", "hasFreq"];
+
+
+			if(onOff == 1,
+				{
+					recorderSynth.set(\t_trig, 1, \buf, bufferIndex);
+					Routine{
+						lengthOfEachBuffer.wait;
+						recorderSynth.set(\t_trig, 0);	//stop sound recording
+						b[bufferIndex - (b[0].bufnum)] = b[bufferIndex - (b[0].bufnum)].normalize;
+						"recorded something".postln;
+					}.play
+				};
+			);
+
+			changeConvolutionBuffer =
+			Routine({
+				var newKernel;
+				"buffer index: ".post; bufferIndex.postln;
+				newKernel = b[bufferIndex - (b[0].bufnum)].normalize;
+
+				"Convolution Action changed to ".post; newKernel.bufnum.postln;
+
+				convolutionSynth2.set(\kernel, newKernel);
+
+				0.5.wait;
+
+				convolutionSynth2.set(\kernelTrig, 1);
+
+				1.wait;
+
+				convolutionSynth2.set(\kernelTrig, 0);
+			});
+
+			buffersWithValues.add([bufferIndex, thisFlat, thisCentroid, thisPercentile, thisEntropy, thisDissonance, thisAmp, thisFreq, thisHasFreq]);
+
+			// "ORDERED BUFS: ".post; buffersWithValues.postln;
+
+		}, replyName);
+	};
+	responder.fork;
+
+
+});
+s.meter;
+)
+
+
+
+// LOOK AT BUFFERS!!!
+(
+b[0..10].do({arg thisBuf;
+	thisBuf.plot;
+
+});
+)
+b[1].plot;
+b.do(_.plot)
+f = Buffer.alloc(s, 44100, 1)
+f.free
+
+s.quit
+b.choose.plot
+
+Server.killAll;
+s.makeWindow
+b[0].bufnum
+b.size.postln;
+s.meter
+
+s.plotTree
+
+
+
+
